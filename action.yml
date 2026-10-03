@@ -1,0 +1,54 @@
+name: Supabase backup (with a restore check)
+description: Dump a Supabase database on a schedule, keep the files, and prove they restore.
+author: Reeve
+branding:
+  icon: database
+  color: green
+
+inputs:
+  db-url:
+    description: >
+      The Session pooler connection string from your project's Connect button,
+      passed as a secret. Not the direct db.<ref>.supabase.co host: GitHub's
+      runners have no IPv6 route to it.
+    required: true
+  destination:
+    description: Where the files go, `artifact` (default) or `s3` (any S3-compatible store, Cloudflare R2 included).
+    required: false
+    default: artifact
+  retention-days:
+    description: How long an artifact is kept (GitHub's own limit applies).
+    required: false
+    default: '30'
+  s3-bucket:
+    description: Bucket name, when destination is s3.
+    required: false
+  s3-endpoint:
+    description: Endpoint URL for a non-AWS store (R2, B2, MinIO).
+    required: false
+  s3-prefix:
+    description: Key prefix inside the bucket.
+    required: false
+    default: supabase-backups/
+  verify:
+    description: Restore the dump into a throwaway Postgres and check it, `true` (default) or `false`.
+    required: false
+    default: 'true'
+
+outputs:
+  files:
+    description: The files written, space-separated.
+  verified:
+    description: '`true` when the restore check passed, `false` when it failed, empty when skipped.'
+
+runs:
+  using: composite
+  steps:
+    # Step 2 of the build: the dump. Step 3: the upload. Step 4: the check.
+    # Each script fails loudly until it is written; nothing here pretends to
+    # have backed anything up.
+    - name: Dump
+      shell: bash
+      run: ${{ github.action_path }}/scripts/dump.sh
+      env:
+        SUPABASE_DB_URL: ${{ inputs.db-url }}

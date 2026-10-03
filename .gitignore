@@ -1,0 +1,5 @@
+node_modules/
+*.sql
+*.sql.gz
+*.dump
+.env
