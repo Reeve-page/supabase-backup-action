@@ -52,8 +52,7 @@ says to use the Session pooler string by default.
    live.
 3. **Restores them** into a fresh Supabase database on the runner
    (`supabase db start`, on your project's Postgres major version), with the
-   `psql` command from the same guide. Any restored `pg_cron` jobs are paused in
-   the same transaction, so nothing scheduled runs from the copy.
+   `psql` command from the same guide.
 4. **Counts** the rows of every table in the restored database and compares
    each count with the rows `data.sql` holds for that table. The result goes
    into `restore-check.tsv` beside the three files and into the run's summary.
@@ -143,6 +142,10 @@ count against your plan's minutes on private ones.
 - **That encrypted columns decrypt.** Vault secrets and pgsodium columns restore
   as ciphertext, and the root key is never in a backup. Supabase's guide
   explains how to copy the key to a new project.
+- **Your `pg_cron` jobs.** The extension comes back with the schema, but the
+  jobs live in `cron.job`, whose rows pg_dump leaves out of this dump, so a
+  restored project runs none of them. Keep your `cron.schedule` calls in a
+  migration or a file you can run again.
 - **Anything outside the database:** Edge Functions, auth provider settings,
   API keys and project settings.
 
