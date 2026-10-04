@@ -1,5 +1,5 @@
-name: Supabase backup (with a restore check)
-description: Dump a Supabase database on a schedule, keep the files, and prove they restore.
+name: Supabase backup with a restore check
+description: Back up a Supabase database on a schedule, keep the copy outside Supabase, and prove it restores.
 author: Reeve
 branding:
   icon: database
@@ -13,47 +13,133 @@ inputs:
       runners have no IPv6 route to it.
     required: true
   destination:
-    description: Where the files go, `artifact` (default) or `s3` (any S3-compatible store, Cloudflare R2 included).
+    description: >
+      Where the copy goes. `artifact` (default) keeps it with the workflow run,
+      `s3` sends it to any S3-compatible bucket (Cloudflare R2 included), and
+      `none` leaves the files in the workspace for your own steps.
     required: false
     default: artifact
   retention-days:
-    description: How long an artifact is kept (GitHub's own limit applies).
+    description: Days GitHub keeps the artifact, when destination is artifact.
     required: false
-    default: '30'
+    default: '7'
   s3-bucket:
     description: Bucket name, when destination is s3.
     required: false
-  s3-endpoint:
-    description: Endpoint URL for a non-AWS store (R2, B2, MinIO).
-    required: false
+    default: ''
   s3-prefix:
-    description: Key prefix inside the bucket.
+    description: Key prefix inside the bucket. Each run writes to `<prefix><timestamp>/`.
     required: false
     default: supabase-backups/
+  s3-endpoint:
+    description: Endpoint URL for a store that is not AWS, such as `https://<account-id>.r2.cloudflarestorage.com`.
+    required: false
+    default: ''
+  s3-region:
+    description: Bucket region. Defaults to `auto` when s3-endpoint is set, else to AWS_REGION or us-east-1.
+    required: false
+    default: ''
+  s3-access-key-id:
+    description: Access key id, as a secret. Leave empty to use credentials already in the job, such as aws-actions/configure-aws-credentials.
+    required: false
+    default: ''
+  s3-secret-access-key:
+    description: Secret access key, as a secret.
+    required: false
+    default: ''
   verify:
-    description: Restore the dump into a throwaway Postgres and check it, `true` (default) or `false`.
+    description: Restore the copy into a throwaway Supabase database on the runner and count every table, `true` (default) or `false`.
     required: false
     default: 'true'
+  postgres-version:
+    description: Your project's Postgres major version. Read from the server when empty, which is what you want.
+    required: false
+    default: ''
+  path:
+    description: Folder in the workspace the files are written to. Each run adds a timestamped folder inside it.
+    required: false
+    default: supabase-backup
+  cli-version:
+    description: Supabase CLI version for supabase/setup-cli.
+    required: false
+    default: latest
 
 outputs:
+  dir:
+    description: The folder holding roles.sql, schema.sql and data.sql.
+    value: ${{ steps.dump.outputs.dir }}
   files:
-    description: The files written, space-separated.
-  verified:
-    description: '`true` when the restore check passed, `false` when it failed, empty when skipped.'
+    description: The three files, space-separated.
+    value: ${{ steps.dump.outputs.files }}
+  check:
+    description: '`passed`, `failed`, `unchecked` when the check could not run, or `skipped` when verify is false.'
+    value: ${{ steps.check.outputs.result || 'skipped' }}
+  artifact-url:
+    description: Download URL of the artifact, when destination is artifact.
+    value: ${{ steps.artifact.outputs.artifact-url }}
+  s3-uri:
+    description: Where the copy landed, when destination is s3.
+    value: ${{ steps.s3.outputs.uri }}
 
 runs:
   using: composite
   steps:
-    # Upload and restore check are not written yet.
-    # The CLI runs a pg_dump that matches the project's Postgres version.
     - name: Install the Supabase CLI
-      uses: supabase/setup-cli@v1
+      uses: supabase/setup-cli@v3
       with:
-        version: latest
+        version: ${{ inputs.cli-version }}
 
-    - name: Dump
+    - name: Dump roles, schema and data
       id: dump
       shell: bash
-      run: ${{ github.action_path }}/scripts/dump.sh
+      run: '"$GITHUB_ACTION_PATH/scripts/dump.sh"'
       env:
         SUPABASE_DB_URL: ${{ inputs.db-url }}
+        BACKUP_DESTINATION: ${{ inputs.destination }}
+        BACKUP_VERIFY: ${{ inputs.verify }}
+        BACKUP_S3_BUCKET: ${{ inputs.s3-bucket }}
+        BACKUP_PG_MAJOR: ${{ inputs.postgres-version }}
+        BACKUP_PATH: ${{ inputs.path }}
+
+    - name: Restore check
+      id: check
+      if: inputs.verify == 'true'
+      continue-on-error: true
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/scripts/check.sh" "$BACKUP_DIR"'
+      env:
+        BACKUP_DIR: ${{ steps.dump.outputs.dir }}
+
+    - name: Keep the copy as an artifact
+      id: artifact
+      if: inputs.destination == 'artifact'
+      uses: actions/upload-artifact@v7
+      with:
+        name: supabase-backup-${{ steps.dump.outputs.stamp }}
+        path: ${{ steps.dump.outputs.dir }}
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: error
+
+    - name: Keep the copy in S3
+      id: s3
+      if: inputs.destination == 's3'
+      shell: bash
+      run: '"$GITHUB_ACTION_PATH/scripts/upload-s3.sh"'
+      env:
+        BACKUP_DIR: ${{ steps.dump.outputs.dir }}
+        BACKUP_STAMP: ${{ steps.dump.outputs.stamp }}
+        S3_BUCKET: ${{ inputs.s3-bucket }}
+        S3_PREFIX: ${{ inputs.s3-prefix }}
+        S3_ENDPOINT: ${{ inputs.s3-endpoint }}
+        S3_REGION: ${{ inputs.s3-region }}
+        S3_ACCESS_KEY_ID: ${{ inputs.s3-access-key-id }}
+        S3_SECRET_ACCESS_KEY: ${{ inputs.s3-secret-access-key }}
+
+    - name: Fail when the restore check did not pass
+      if: steps.check.outcome == 'failure'
+      shell: bash
+      run: |
+        echo "::error title=supabase-backup::The copy was kept, but the restore check did not pass (${CHECK_RESULT:-unchecked}). See the Restore check step."
+        exit 1
+      env:
+        CHECK_RESULT: ${{ steps.check.outputs.result }}
