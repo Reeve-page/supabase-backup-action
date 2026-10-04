@@ -1,63 +1,106 @@
 #!/usr/bin/env bash
-# Dump a Supabase database as roles, schema and data, the three files Supabase's
-# backup-restore guide prescribes. A restore replays them in that order.
-
+# Dump roles, schema and data the way Supabase's backup and restore guide does.
 set -euo pipefail
 
-if [ -z "${SUPABASE_DB_URL:-}" ]; then
-  echo "supabase-backup-action: SUPABASE_DB_URL is empty. Pass the Session pooler string from your project's Connect button as a secret." >&2
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+. "$here/lib.sh"
+
+url="${SUPABASE_DB_URL:-}"
+destination="${BACKUP_DESTINATION:-artifact}"
+verify="${BACKUP_VERIFY:-true}"
+
+if [ -z "$url" ]; then
+  err "db-url is empty. Pass the Session pooler string from your project's Connect button as a secret."
   exit 1
 fi
-
+case "$destination" in
+  artifact | none) ;;
+  s3)
+    if [ -z "${BACKUP_S3_BUCKET:-}" ]; then
+      err "destination is s3 but s3-bucket is empty."
+      exit 1
+    fi
+    ;;
+  *)
+    err "destination must be artifact, s3 or none, not '$destination'."
+    exit 1
+    ;;
+esac
+case "$verify" in
+  true | false) ;;
+  *)
+    err "verify must be true or false, not '$verify'."
+    exit 1
+    ;;
+esac
 if ! command -v supabase >/dev/null 2>&1; then
-  echo "supabase-backup-action: the Supabase CLI is not on PATH." >&2
-  echo "  Add 'uses: supabase/setup-cli@v1' before this step." >&2
+  err "The Supabase CLI is not on PATH."
   exit 1
 fi
 
-OUT="${SUPABASE_BACKUP_DIR:-supabase-backup}"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$OUT"
+host="$(printf '%s' "$url" | sed -E 's#^[^/]*//(.*@)?([^:/?]+).*#\2#')"
+say "dumping $(masked_url "$url")"
 
-ROLES="$OUT/roles-$STAMP.sql"
-SCHEMA="$OUT/schema-$STAMP.sql"
-DATA="$OUT/data-$STAMP.sql"
-
-# Log the target with the password masked.
-printf 'supabase-backup-action: dumping %s\n' "$(printf '%s' "$SUPABASE_DB_URL" | sed -E 's#^(postgres(ql)?://)[^:]+:[^@]+@#\1***:***@#')" >&2
-
-supabase db dump --db-url "$SUPABASE_DB_URL" -f "$ROLES" --role-only
-supabase db dump --db-url "$SUPABASE_DB_URL" -f "$SCHEMA"
-# The vector tables don't replay, so the guide leaves them out.
-supabase db dump --db-url "$SUPABASE_DB_URL" -f "$DATA" --use-copy --data-only \
-  -x "storage.buckets_vectors" -x "storage.vector_indexes"
-
-# Low floors: they only catch a dump that exists and holds nothing.
-floor() {
-  local file="$1" min="$2" size
-  size=$(wc -c <"$file")
-  if [ "$size" -lt "$min" ]; then
-    echo "supabase-backup-action: $file is $size bytes, under the $min-byte floor. Treating this as a failed dump." >&2
+# pg_dump 17 writes SET transaction_timeout, which a Postgres 15 server rejects on restore.
+major="${BACKUP_PG_MAJOR:-}"
+major="${major%%.*}"
+if [ -z "$major" ]; then
+  num=""
+  if command -v psql >/dev/null 2>&1; then
+    num="$(PGCONNECT_TIMEOUT=20 psql -X -A -t -c 'show server_version_num' -d "$url" 2>/dev/null || true)"
+  fi
+  if [[ "$num" =~ ^[0-9]+$ ]]; then
+    major=$((num / 10000))
+  else
+    warn "Could not read the server's Postgres version, so pg_dump is the Supabase CLI's default. Set postgres-version if your project runs Postgres 15."
+  fi
+fi
+if [ -n "$major" ]; then
+  if ! [[ "$major" =~ ^[0-9]+$ ]]; then
+    err "postgres-version must be a number such as 15 or 17, not '${BACKUP_PG_MAJOR:-}'."
     exit 1
   fi
-  printf 'supabase-backup-action: %s %s bytes\n' "$file" "$size" >&2
+  export SUPABASE_DB_MAJOR_VERSION="$major"
+  say "Postgres $major"
+fi
+
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "${BACKUP_PATH:-supabase-backup}/$stamp"
+out="$(cd "${BACKUP_PATH:-supabase-backup}/$stamp" && pwd)"
+
+# An empty workdir, so a supabase/config.toml in the caller's repo can't pick the pg_dump version.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+dump() {
+  local what="$1"
+  shift
+  say "dumping $what"
+  if ! supabase db dump --workdir "$work" --db-url "$url" "$@"; then
+    err "supabase db dump failed on the $what."
+    if [[ "$host" =~ ^db\..+\.supabase\.co$ ]]; then
+      err "db-url uses the direct connection ($host), which GitHub's runners can't reach over IPv6. Use the Session pooler string from your project's Connect button."
+    fi
+    exit 1
+  fi
 }
 
-floor "$ROLES" 200
-floor "$SCHEMA" 1000
-floor "$DATA" 100
+dump roles -f "$out/roles.sql" --role-only
+dump schema -f "$out/schema.sql"
+# The guide leaves out the vector tables, which don't replay.
+dump data -f "$out/data.sql" --use-copy --data-only \
+  -x "storage.buckets_vectors" -x "storage.vector_indexes"
 
-# COPY blocks exist even for empty tables, so this proves the auth schema was
-# dumped without requiring any users.
-if ! grep -q '^COPY auth\.users ' "$DATA"; then
-  echo "supabase-backup-action: no 'COPY auth.users' block in $DATA." >&2
-  echo "  The data dump did not reach the auth schema, so this is not a backup you can restore your users from." >&2
-  exit 1
-fi
+check_files "$out"
 
-echo "supabase-backup-action: auth.users is in the data dump" >&2
+for f in roles schema data; do
+  say "$f.sql $(wc -c <"$out/$f.sql") bytes"
+done
+users="$(copy_counts "$out/data.sql" | awk -F '\t' '$1 == "\"auth\".\"users\"" { print $2 }')"
+say "auth.users: ${users:-0} rows in the dump"
 
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  echo "files=$ROLES $SCHEMA $DATA" >>"$GITHUB_OUTPUT"
-  echo "dir=$OUT" >>"$GITHUB_OUTPUT"
-fi
+output dir "$out"
+output files "$out/roles.sql $out/schema.sql $out/data.sql"
+output stamp "$stamp"
+output postgres-major "${major:-}"
