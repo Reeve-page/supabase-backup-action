@@ -44,10 +44,15 @@ outputs:
 runs:
   using: composite
   steps:
-    # Step 2 of the build: the dump. Step 3: the upload. Step 4: the check.
-    # Each script fails loudly until it is written; nothing here pretends to
-    # have backed anything up.
+    # Upload and restore check are not written yet.
+    # The CLI runs a pg_dump that matches the project's Postgres version.
+    - name: Install the Supabase CLI
+      uses: supabase/setup-cli@v1
+      with:
+        version: latest
+
     - name: Dump
+      id: dump
       shell: bash
       run: ${{ github.action_path }}/scripts/dump.sh
       env:
