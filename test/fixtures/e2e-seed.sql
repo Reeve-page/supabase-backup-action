@@ -1,4 +1,3 @@
--- Seeds a local Supabase database for the end-to-end run in CI.
 INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at)
 SELECT '00000000-0000-0000-0000-000000000000', gen_random_uuid(), 'authenticated', 'authenticated',
        'user' || g || '@example.com', 'not-a-real-hash', now(), now(), now()

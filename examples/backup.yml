@@ -3,7 +3,7 @@ name: supabase-backup
 
 on:
   schedule:
-    - cron: '17 3 * * *' # 03:17 UTC daily, off the hour
+    - cron: '17 3 * * *' # 03:17 UTC daily
   workflow_dispatch:
 
 jobs:

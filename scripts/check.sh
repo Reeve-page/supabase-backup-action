@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Replay a backup into a throwaway Supabase database and count what came back.
-# Exits 0 when it passed, 1 when the backup failed, 2 when the check could not run.
+# Usage: check.sh <dir>. Exit 0 passed, 1 failed, 2 could not run.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,7 +72,7 @@ if [ "$own" != 0 ]; then
   unchecked "The check only restores into an empty database, and this one already has tables in public."
 fi
 
-# Restored cron jobs would otherwise start running in the throwaway database.
+# Stop restored cron jobs from running.
 pause_cron="DO \$\$ BEGIN IF to_regclass('cron.job') IS NOT NULL THEN UPDATE cron.job SET active = false; END IF; END \$\$"
 
 say "replaying the backup with the psql command from Supabase's restore guide"
@@ -85,8 +84,16 @@ if ! psql -X --quiet --single-transaction --variable ON_ERROR_STOP=1 \
   --file "$dir/data.sql" \
   --command "$pause_cron" \
   --dbname "$url" >"$tmp/replay.log" 2>&1; then
-  first="$(grep -m 1 -E 'ERROR|FATAL' "$tmp/replay.log" || tail -n 1 "$tmp/replay.log")"
-  err "The backup did not restore. $first"
+  raw="$(grep -m 1 -E 'ERROR|FATAL' "$tmp/replay.log" || tail -n 1 "$tmp/replay.log")"
+  first="$(printf '%s' "$raw" | sed -E 's#^psql:[^:]*/([^/:]+):([0-9]+): #\1 line \2: #')"
+  where="$(printf '%s' "$raw" | sed -n -E 's#^psql:([^:]+):([0-9]+):.*#\1 \2#p')"
+  statement=""
+  if [ -n "$where" ]; then
+    case "$(basename "${where% *}")" in
+      roles.sql | schema.sql) statement="$(sed -n "${where##* }p" "${where% *}" | cut -c 1-300)" ;;
+    esac
+  fi
+  err "The backup did not restore. $first${statement:+ Statement: $statement}"
   tail -n 20 "$tmp/replay.log" >&2
   output result failed
   {
@@ -99,6 +106,7 @@ if ! psql -X --quiet --single-transaction --variable ON_ERROR_STOP=1 \
   summary ""
   summary '```'
   summary "$first"
+  if [ -n "$statement" ]; then summary "$statement"; fi
   summary '```'
   summary ""
   summary "Supabase's [restore guide](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore#troubleshooting-notes) covers the common errors."
@@ -107,7 +115,7 @@ fi
 seconds=$((SECONDS - started))
 
 copy_counts "$dir/data.sql" >"$tmp/want"
-# row_security off makes a policy that would hide rows an error instead of a short count.
+# Error out rather than undercount under RLS.
 {
   printf 'SET row_security = off;\n'
   awk -F '\t' '{ printf "%sSELECT %d AS i, count(*) AS n FROM %s\n", (NR > 1 ? "UNION ALL " : ""), NR, $1 } END { print "ORDER BY i;" }' "$tmp/want"

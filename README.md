@@ -42,6 +42,10 @@ says to use the Session pooler string by default.
    `data.sql` with the three `supabase db dump` commands from Supabase's backup
    and restore guide. The action reads your project's Postgres version from the
    server first, and the Supabase CLI runs the `pg_dump` for that version.
+   On Postgres 17, `roles.sql` also gets grants of settings to Supabase's own
+   roles. The CLI misses those, and they stop Supabase's restore command, so
+   the action comments them out the way the CLI handles those roles' other
+   lines.
 2. **Checks the files.** `data.sql` must end with pg_dump's
    `PostgreSQL database dump complete` line, which a file cut off partway never
    has. It must also hold a `COPY "auth"."users"` block, where your accounts

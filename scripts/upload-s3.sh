@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Copy a backup folder to an S3-compatible bucket.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

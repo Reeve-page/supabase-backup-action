@@ -1,4 +1,4 @@
--- Stands in for the auth schema Supabase's migrations create.
+-- Minimal auth schema.
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE auth.users (
   id uuid PRIMARY KEY,

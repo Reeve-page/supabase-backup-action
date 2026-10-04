@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Dump roles, schema and data the way Supabase's backup and restore guide does.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,7 +41,7 @@ fi
 host="$(printf '%s' "$url" | sed -E 's#^[^/]*//(.*@)?([^:/?]+).*#\2#')"
 say "dumping $(masked_url "$url")"
 
-# pg_dump 17 writes SET transaction_timeout, which a Postgres 15 server rejects on restore.
+# pg_dump 17 output doesn't restore into Postgres 15, so match the server.
 major="${BACKUP_PG_MAJOR:-}"
 major="${major%%.*}"
 if [ -z "$major" ]; then
@@ -69,7 +68,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "${BACKUP_PATH:-supabase-backup}/$stamp"
 out="$(cd "${BACKUP_PATH:-supabase-backup}/$stamp" && pwd)"
 
-# An empty workdir, so a supabase/config.toml in the caller's repo can't pick the pg_dump version.
+# Empty workdir so the caller's supabase/config.toml is ignored.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -88,9 +87,12 @@ dump() {
 
 dump roles -f "$out/roles.sql" --role-only
 dump schema -f "$out/schema.sql"
-# The guide leaves out the vector tables, which don't replay.
+# Same exclusions as Supabase's guide.
 dump data -f "$out/data.sql" --use-copy --data-only \
   -x "storage.buckets_vectors" -x "storage.vector_indexes"
+
+n="$(comment_reserved_grants "$out/roles.sql")"
+if [ "$n" != 0 ]; then say "roles.sql: commented out $n parameter grants to Supabase's own roles"; fi
 
 check_files "$out"
 

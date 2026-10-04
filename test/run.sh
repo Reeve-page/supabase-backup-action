@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests the scripts against a plain Postgres. Needs a superuser in TEST_PGHOST/TEST_PGPORT/TEST_PGUSER.
+# Needs a Postgres superuser: TEST_PGHOST, TEST_PGPORT, TEST_PGUSER, TEST_PGPASSWORD.
 set -uo pipefail
 
 unset GITHUB_ACTIONS GITHUB_OUTPUT GITHUB_STEP_SUMMARY
@@ -33,7 +33,6 @@ fresh_dst() {
     sql "$(url_for "$dst")" -f "$fixtures/auth.sql"
 }
 
-# A backup in the shape the Supabase CLI writes it.
 make_backup() {
   local out="$1" schemas="${2:---schema public --schema auth}"
   mkdir -p "$out"
@@ -106,6 +105,19 @@ test_masked_url() {
 
 test_files_good() { check_files "$tmp/good"; }
 
+test_comment_reserved_grants() {
+  printf '%s\n' 'CREATE ROLE "app_admin";' \
+    'GRANT SET ON PARAMETER "log_min_messages" TO "supabase_realtime_admin";' \
+    'GRANT SET,ALTER SYSTEM ON PARAMETER "log_min_messages" TO "postgres";' \
+    'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";' >"$tmp/roles.sql"
+  expect "$(comment_reserved_grants "$tmp/roles.sql")" 2 &&
+    expect "$(cat "$tmp/roles.sql")" "$(printf '%s\n' 'CREATE ROLE "app_admin";' \
+      '-- GRANT SET ON PARAMETER "log_min_messages" TO "supabase_realtime_admin";' \
+      '-- GRANT SET,ALTER SYSTEM ON PARAMETER "log_min_messages" TO "postgres";' \
+      'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";')" &&
+    expect "$(comment_reserved_grants "$tmp/roles.sql")" 0
+}
+
 test_files_cut() {
   cp -r "$tmp/good" "$tmp/cut"
   local keep
@@ -162,6 +174,8 @@ test_check_bad_schema() {
   expect "$?" 1 &&
     contains "$tmp/out" "result=failed" &&
     contains "$tmp/log" 'role "nobody_by_this_name" does not exist' &&
+    contains "$tmp/log" 'Statement: GRANT SELECT ON "public"."orders" TO "nobody_by_this_name";' &&
+    contains "$tmp/log" 'schema.sql line ' &&
     contains "$tmp/badschema/restore-check.tsv" "failed"
 }
 
@@ -174,7 +188,7 @@ test_check_no_dir() {
   expect "$?" 2
 }
 
-# A stand-in for the Supabase CLI that writes the fixture files and records how it was called.
+# Fake supabase CLI.
 stub_bin="$tmp/bin"
 mkdir -p "$stub_bin"
 cat >"$stub_bin/supabase" <<EOF
@@ -248,7 +262,7 @@ test_upload_s3() {
 }
 
 for name in copy_counts pg_major count_mismatches masked_url \
-  files_good files_cut files_no_users \
+  files_good comment_reserved_grants files_cut files_no_users \
   check_passes check_restored_the_rows check_refuses_a_used_database check_cut_file \
   check_bad_schema check_rolled_back check_no_dir \
   dump_writes_the_three_files dump_refuses_bad_inputs dump_hints_at_the_pooler upload_s3; do

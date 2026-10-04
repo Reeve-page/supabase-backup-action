@@ -1,4 +1,4 @@
-# The same backup, kept in a Cloudflare R2 bucket instead of the run's artifacts.
+# Stored in Cloudflare R2.
 name: supabase-backup
 
 on:

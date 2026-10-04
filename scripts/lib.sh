@@ -34,7 +34,6 @@ masked_url() {
   printf '%s' "$1" | sed -E 's#^(postgres(ql)?://).*@#\1***@#'
 }
 
-# The checks a file can fail without being restored.
 check_files() {
   local dir="$1" f
   for f in roles schema data; do
@@ -53,7 +52,19 @@ check_files() {
   fi
 }
 
-# One line per COPY block in a data dump: table, then the rows it holds.
+# The CLI comments out statements for Supabase's own roles but misses parameter grants.
+comment_reserved_grants() {
+  local file="$1" n
+  local reserved='anon|authenticated|authenticator|cli_login_[^"]*|dashboard_user|pgbouncer|postgres|service_role|supabase_[^"]*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin'
+  local pattern="^GRANT .* ON PARAMETER .* TO \"($reserved)\""
+  n="$(grep -c -E "$pattern" "$file" || true)"
+  if [ "$n" -gt 0 ]; then
+    sed -E "s/$pattern.*$/-- &/" "$file" >"$file.tmp" && mv "$file.tmp" "$file"
+  fi
+  printf '%s\n' "$n"
+}
+
+# table<TAB>rows for each COPY block
 copy_counts() {
   awk '
     /^COPY .* FROM stdin;$/ {
@@ -74,7 +85,7 @@ pg_major_of_dump() {
   sed -n 's/^-- Dumped from database version \([0-9][0-9]*\).*/\1/p' "$1" | head -n 1
 }
 
-# $1 is copy_counts output, $2 the restored count per line in the same order.
+# $1: copy_counts output, $2: restored counts in the same order
 count_mismatches() {
   paste "$1" "$2" | awk -F '\t' '$2 != $3 { print $1 "\t" $2 "\t" ($3 == "" ? "?" : $3) }'
 }
