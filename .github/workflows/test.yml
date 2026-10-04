@@ -1,0 +1,85 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -x scripts/*.sh test/run.sh
+      - run: ./test/run.sh
+        env:
+          TEST_PGHOST: 127.0.0.1
+          TEST_PGPORT: '5432'
+          TEST_PGUSER: postgres
+          TEST_PGPASSWORD: postgres
+
+  end-to-end:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: supabase/setup-cli@v3
+        with:
+          version: latest
+
+      - name: Start a local Supabase database to back up
+        run: |
+          mkdir -p "$RUNNER_TEMP/source"
+          cd "$RUNNER_TEMP/source"
+          supabase init
+          supabase db start
+          psql -X -v ON_ERROR_STOP=1 -d "$SOURCE_URL" -f "$GITHUB_WORKSPACE/test/fixtures/e2e-seed.sql"
+
+      - name: Run the action
+        id: backup
+        uses: ./
+        with:
+          db-url: ${{ env.SOURCE_URL }}
+          retention-days: 1
+
+      - name: Check what it produced
+        env:
+          CHECK: ${{ steps.backup.outputs.check }}
+          DIR: ${{ steps.backup.outputs.dir }}
+          ARTIFACT_URL: ${{ steps.backup.outputs.artifact-url }}
+        run: |
+          cat "$DIR/restore-check.tsv"
+          test "$CHECK" = passed
+          test -n "$ARTIFACT_URL"
+          grep -qP '^"public"\."orders"\t300\t300$' "$DIR/restore-check.tsv"
+          grep -qP '^"auth"\."users"\t3\t3$' "$DIR/restore-check.tsv"
+          grep -qP '^"storage"\."buckets"\t1\t1$' "$DIR/restore-check.tsv"
+
+      - name: A copy that was cut off fails the check
+        env:
+          DIR: ${{ steps.backup.outputs.dir }}
+        run: |
+          cut="$RUNNER_TEMP/cut"
+          cp -r "$DIR" "$cut"
+          line="$(grep -n '^COPY "public"."orders"' "$DIR/data.sql" | cut -d: -f1)"
+          head -n "$((line + 100))" "$DIR/data.sql" >"$cut/data.sql"
+          if GITHUB_ACTIONS='' GITHUB_OUTPUT='' GITHUB_STEP_SUMMARY='' ./scripts/check.sh "$cut"; then
+            echo "::error::check.sh passed a file that was cut off"
+            exit 1
+          fi

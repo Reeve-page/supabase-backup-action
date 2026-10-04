@@ -3,3 +3,5 @@ node_modules/
 *.sql.gz
 *.dump
 .env
+supabase-backup/
+!test/fixtures/*.sql
