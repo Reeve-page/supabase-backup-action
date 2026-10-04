@@ -105,17 +105,23 @@ test_masked_url() {
 
 test_files_good() { check_files "$tmp/good"; }
 
-test_comment_reserved_grants() {
+test_fix_roles_sql() {
   printf '%s\n' 'CREATE ROLE "app_admin";' \
     'GRANT SET ON PARAMETER "log_min_messages" TO "supabase_realtime_admin";' \
     'GRANT SET,ALTER SYSTEM ON PARAMETER "log_min_messages" TO "postgres";' \
-    'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";' >"$tmp/roles.sql"
-  expect "$(comment_reserved_grants "$tmp/roles.sql")" 2 &&
+    'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";' \
+    'ALTER ROLE "supabase_admin" SET "statement_timeout" TO '"'0'"';' \
+    'ALTER ROLE "authenticator" SET "statement_timeout" TO '"'8s'"';' \
+    'ALTER ROLE "app_admin" SET "statement_timeout" TO '"'1min'"';' >"$tmp/roles.sql"
+  expect "$(fix_roles_sql "$tmp/roles.sql")" 3 &&
     expect "$(cat "$tmp/roles.sql")" "$(printf '%s\n' 'CREATE ROLE "app_admin";' \
       '-- GRANT SET ON PARAMETER "log_min_messages" TO "supabase_realtime_admin";' \
       '-- GRANT SET,ALTER SYSTEM ON PARAMETER "log_min_messages" TO "postgres";' \
-      'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";')" &&
-    expect "$(comment_reserved_grants "$tmp/roles.sql")" 0
+      'GRANT SET ON PARAMETER "log_min_messages" TO "app_admin";' \
+      '-- ALTER ROLE "supabase_admin" SET "statement_timeout" TO '"'0'"';' \
+      'ALTER ROLE "authenticator" SET "statement_timeout" TO '"'8s'"';' \
+      'ALTER ROLE "app_admin" SET "statement_timeout" TO '"'1min'"';')" &&
+    expect "$(fix_roles_sql "$tmp/roles.sql")" 0
 }
 
 test_files_cut() {
@@ -262,7 +268,7 @@ test_upload_s3() {
 }
 
 for name in copy_counts pg_major count_mismatches masked_url \
-  files_good comment_reserved_grants files_cut files_no_users \
+  files_good fix_roles_sql files_cut files_no_users \
   check_passes check_restored_the_rows check_refuses_a_used_database check_cut_file \
   check_bad_schema check_rolled_back check_no_dir \
   dump_writes_the_three_files dump_refuses_bad_inputs dump_hints_at_the_pooler upload_s3; do

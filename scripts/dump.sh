@@ -91,8 +91,8 @@ dump schema -f "$out/schema.sql"
 dump data -f "$out/data.sql" --use-copy --data-only \
   -x "storage.buckets_vectors" -x "storage.vector_indexes"
 
-n="$(comment_reserved_grants "$out/roles.sql")"
-if [ "$n" != 0 ]; then say "roles.sql: commented out $n parameter grants to Supabase's own roles"; fi
+n="$(fix_roles_sql "$out/roles.sql")"
+if [ "$n" != 0 ]; then say "roles.sql: commented out $n statements on Supabase's own roles that a new project refuses"; fi
 
 check_files "$out"
 

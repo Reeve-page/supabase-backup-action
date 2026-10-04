@@ -52,11 +52,13 @@ check_files() {
   fi
 }
 
-# The CLI comments out statements for Supabase's own roles but misses parameter grants.
-comment_reserved_grants() {
+# Statements on Supabase's own roles that the CLI leaves in roles.sql and a new project refuses.
+fix_roles_sql() {
   local file="$1" n
   local reserved='anon|authenticated|authenticator|cli_login_[^"]*|dashboard_user|pgbouncer|postgres|service_role|supabase_[^"]*|pgsodium_keyholder|pgsodium_keyiduser|pgsodium_keymaker|pgtle_admin'
-  local pattern="^GRANT .* ON PARAMETER .* TO \"($reserved)\""
+  # supautils.reserved_roles without a trailing *: nobody but a superuser may alter them.
+  local locked='cli_login_[^"]*|dashboard_user|pgbouncer|supabase_[^"]*'
+  local pattern="^(GRANT .* ON PARAMETER .* TO \"($reserved)\"|ALTER ROLE \"($locked)\" )"
   n="$(grep -c -E "$pattern" "$file" || true)"
   if [ "$n" -gt 0 ]; then
     sed -E "s/$pattern.*$/-- &/" "$file" >"$file.tmp" && mv "$file.tmp" "$file"
