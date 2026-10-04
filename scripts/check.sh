@@ -73,7 +73,7 @@ if [ "$own" != 0 ]; then
 fi
 
 # Stop restored cron jobs from running.
-pause_cron="DO \$\$ BEGIN IF to_regclass('cron.job') IS NOT NULL THEN UPDATE cron.job SET active = false; END IF; END \$\$"
+pause_cron="DO \$\$ BEGIN IF to_regclass('cron.job') IS NOT NULL AND has_table_privilege('cron.job', 'UPDATE') THEN UPDATE cron.job SET active = false; END IF; END \$\$"
 
 say "replaying the backup with the psql command from Supabase's restore guide"
 started=$SECONDS

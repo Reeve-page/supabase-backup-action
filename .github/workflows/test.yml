@@ -64,7 +64,7 @@ jobs:
           DIR: ${{ steps.backup.outputs.dir }}
           ARTIFACT_URL: ${{ steps.backup.outputs.artifact-url }}
         run: |
-          cat "$DIR/restore-check.tsv"
+          echo "::notice title=restore-check.tsv::$(sed ':a;N;$!ba;s/\n/%0A/g' "$DIR/restore-check.tsv")"
           test "$CHECK" = passed
           test -n "$ARTIFACT_URL"
           grep -qP '^"public"\."orders"\t300\t300$' "$DIR/restore-check.tsv"
