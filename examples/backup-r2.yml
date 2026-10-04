@@ -1,0 +1,20 @@
+# The same backup, kept in a Cloudflare R2 bucket instead of the run's artifacts.
+name: supabase-backup
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: reeve-page/supabase-backup-action@v1
+        with:
+          db-url: ${{ secrets.SUPABASE_DB_URL }}
+          destination: s3
+          s3-bucket: my-supabase-backups
+          s3-endpoint: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          s3-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          s3-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}

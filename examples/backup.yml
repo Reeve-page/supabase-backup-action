@@ -1,15 +1,15 @@
-# Copy to .github/workflows/supabase-backup.yml in a PRIVATE repository.
+# Copy to .github/workflows/supabase-backup.yml in a private repository.
 name: supabase-backup
 
 on:
   schedule:
-    - cron: '17 3 * * *' # every day at 03:17 UTC, off the hour on purpose
+    - cron: '17 3 * * *' # 03:17 UTC daily, off the hour
   workflow_dispatch:
 
 jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - uses: OWNER/supabase-backup-action@v1
+      - uses: reeve-page/supabase-backup-action@v1
         with:
           db-url: ${{ secrets.SUPABASE_DB_URL }}
